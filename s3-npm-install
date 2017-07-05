@@ -1,0 +1,134 @@
+#!/bin/bash
+
+set -e\
+
+script_name="$(basename $0)"
+
+code_bold="\x1b[1m"
+code_dim="\x1b[2m"
+code_green="\x1b[32m"
+code_red="\x1b[31m"
+code_reset_all="\x1b[0m"
+code_terminal_reset="\033c"
+code_underlined="\x1b[4m"
+
+function assert_arg_truthy() {
+  if [[ -z "$2" ]]; then
+    error "$1 empty!"
+    exit 1
+  fi
+}
+
+function assert_command() {
+  if [ -z "`which "$1" 2> /dev/null`" ];then
+    error "$1 was not available on your path."
+    exit 1
+  fi
+}
+
+function assert_directory() {
+  if [[ ! -d "$dir/$1" ]]; then
+    error "$1 was not a directory!"
+    exit 1
+  fi
+}
+
+function assert_file() {
+  if [[ ! -f "$1" ]]; then
+    error "$1 did not exist!"
+    exit 1
+  fi
+}
+
+function error() {
+  echo "$script_name: $1" >&2
+}
+
+function help() {
+echo -e "
+${code_underlined}${script_name}${code_reset_all}
+
+Install node_modules/ from s3.
+
+${code_underlined}Usage${code_reset_all}:
+
+${script_name} [OPTIONS]
+
+${script_name} will md5sum the contents of package-lock.json, check to see if a file by that hash ending with ".tgz" exists in --s3-bucket.  If a tarball is found, it will be downloaded and unpacked.  Otherwise "${install_command}" is run in the current working directory
+
+${code_underlined}Options${code_reset_all}:
+
+--help, -h)
+
+  Print this menu.
+
+--install-command, -i)
+
+  Sets the install command to use, by default this is "${install_command}".
+
+--s3-bucket, -s)
+
+  Set the S3 bucket to use.
+
+${code_underlined}Documentation${code_reset_all}:
+
+https://github.com/kogosoftwarellc/s3-npm-install
+"
+}
+
+function log() {
+  echo "$script_name: $1"
+}
+
+install_command='npm i'
+s3_bucket=''
+
+while [ "$#" != '0' ];do
+  case "$1" in
+    -h|--help)help && exit;;
+    -i|--install-command)install_command="$2" && shift 2;;
+    -s|--s3-bucket)s3_bucket="$2" && shift 2;;
+  esac
+done
+
+assert_arg_truthy --install-command "$install_command"
+assert_arg_truthy --s3-bucket "$s3_bucket"
+
+assert_file package-lock.json
+
+assert_command aws
+assert_command md5sum
+assert_command npm
+
+file_hash="`md5sum package-lock.json | cut -d ' ' -f 1`"
+if [[ -z "$file_hash" ]]; then
+  error "Something went wrong generating a file hash"
+  exit 1
+fi
+
+bucket_contents="`aws s3 ls "$s3_bucket" 2> /dev/null || {
+  error "Does the $s3_bucket bucket exist?"
+  exit 1
+}`"
+bucket_contents="`echo "$bucket_contents" | sed 's|\s\+| |g' | cut -d ' ' -f 4`"
+
+function install_and_upload_to_s3() {
+  log "${file_hash}.tgz not found in $s3_bucket.  Building and uploading to $s3_bucket..."
+  $install_command
+  tar -zcf "${file_hash}.tgz" node_modules
+  aws s3 cp "${file_hash}.tgz" "s3://$s3_bucket"
+}
+
+function use_cached_version() {
+  log "${file_hash}.tgz found in $s3_bucket.  Removing local node_modules and downloading cached version..."
+  rm -rf node_modules
+  aws s3 cp "s3://$s3_bucket" "${file_hash}.tgz"
+  tar -zxf "${file_hash}.tgz"
+  rm "${file_hash}.tgz"
+}
+
+if [[ -z "$bucket_contents" || -z "`echo "$bucket_contents" | grep "$file_hash"`" ]]; then
+  install_and_upload_to_s3
+else
+  use_cached_version
+fi
