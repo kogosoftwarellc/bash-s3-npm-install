@@ -122,7 +122,7 @@ function install_and_upload_to_s3() {
 function use_cached_version() {
   log "${file_hash}.tgz found in $s3_bucket.  Removing local node_modules and downloading cached version..."
   rm -rf node_modules
-  aws s3 cp "s3://$s3_bucket" "${file_hash}.tgz"
+  aws s3 cp "s3://$s3_bucket/${file_hash}.tgz" .
   tar -zxf "${file_hash}.tgz"
   rm "${file_hash}.tgz"
 }
